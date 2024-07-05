@@ -10,14 +10,33 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
-
+struct saved_registers {
+  /*   0 */ uint64 ra;
+  /*   8 */ uint64 epc;           // saved user program counter
+  /*  16 */ uint64 sp;
+  /*  24 */ uint64 gp;
+  /*  32 */ uint64 tp;
+  /*  40 */ uint64 s0;
+  /*  48 */ uint64 s1;
+  /*  56 */ uint64 s2;
+  /*  64 */ uint64 s3;
+  /*  72 */ uint64 s4;
+  /*  80 */ uint64 s5;
+  /*  88 */ uint64 s6;
+  /*  96 */ uint64 s7;
+  /* 104 */ uint64 s8;
+  /* 112 */ uint64 s9;
+  /* 120 */ uint64 s10;
+  /* 128 */ uint64 s11;
+};
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  struct saved_registers regs;
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
-extern void thread_switch(uint64, uint64);
+extern void thread_switch(struct saved_registers*, struct saved_registers*);
               
 void 
 thread_init(void)
@@ -60,6 +79,7 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch( &t->regs,  &next_thread->regs);
   } else
     next_thread = 0;
 }
@@ -74,6 +94,10 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  t->regs.ra = (uint64) func;
+  // t->regs.sp = (uint64) t->stack;
+  // Stack pointer needs to point at the bottom of the stack, right?
+  t->regs.sp = (uint64) t->stack+STACK_SIZE-1;
 }
 
 void 

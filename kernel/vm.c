@@ -322,15 +322,24 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    
+    *pte &= ~(PTE_W);
     pa = PTE2PA(*pte);
+    // For old process
+    if(!is_cow(pa)) {
+      mark_cow(pa);
+    }
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
+    mem = (char*)pa;
+    // if((mem = kalloc()) == 0)
+      // goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
       goto err;
     }
+    // For new process
+    mark_cow(pa);
   }
   return 0;
 
@@ -352,6 +361,46 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+int
+uvm_cow_remap(pagetable_t pagetable, uint64 va_unaglign)
+{
+  pte_t *pte;
+  uint64 va = PGROUNDDOWN(va_unaglign);
+  pte = walk(pagetable, va, 0);
+  if(pte == 0) {
+    printf("xv6: cow: pte is 0");
+  }
+  if(!is_cow(PTE2PA(*pte))) {
+    panic("xv6: cow: remap non-cow page?");
+  }
+  char* mem;
+  if((mem = kalloc()) == 0) {
+    printf("kalloc failed");
+    goto err;
+  }
+  memmove(mem, (char*) PTE2PA(*pte), PGSIZE);
+  kfree((void*)PTE2PA(*pte));
+  // unmark_cow(PTE2PA(*pte));
+  // TODO: Decrement ref-count
+  // uvmunmap(pagetable, va, 1, 0);
+  // if(mappages(pagetable, va, PGSIZE, (uint64) mem, PTE_FLAGS(*pte) | PTE_W) != 0) {
+  //   kfree(mem);
+  //   goto err;
+  // }
+
+  if((va % PGSIZE) != 0)
+    panic("mappages: va not aligned");
+  *pte = PA2PTE(mem) | PTE_FLAGS(*pte) | PTE_V | PTE_W;
+  
+
+  return 0;
+
+  err:
+    printf("Failed to remap page\n");
+    uvmunmap(pagetable, 0, va / PGSIZE, 1);
+    return -1;
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -366,6 +415,10 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+    if(is_cow(PGROUNDDOWN(PTE2PA(*pte)))) {
+      uvm_cow_remap(pagetable, dstva);
+      // printf("Trying to copyout to cow page");
+    }
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
       return -1;

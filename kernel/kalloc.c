@@ -21,8 +21,11 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  uint8 ref_count[PHYSTOP>>12];
+  uint8 is_cow[PHYSTOP>>12];
 } kmem;
-
+// Needs 8 pages full of bytes for a single-byte of reference count for all the pages
+// 32768 pages are possible
 void
 kinit()
 {
@@ -50,6 +53,12 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+  if(is_cow((uint64) pa)) {
+    unmark_cow((uint64)pa);
+  }
+  if(is_cow((uint64)pa)) {
+    return;
+  }
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -79,4 +88,25 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void mark_cow(uint64 pa)
+{
+  uint64 div_4096 = pa >> 12;
+  kmem.is_cow[div_4096] = 1;
+  kmem.ref_count[div_4096]++;
+}
+void unmark_cow(uint64 pa)
+{
+  uint64 div_4096 = pa >> 12;
+  kmem.ref_count[div_4096]--;
+  if(kmem.ref_count[div_4096] == 0) {
+    kmem.is_cow[div_4096] = 0;
+  }
+}
+
+uint8 is_cow(uint64 pa)
+{
+  uint64 div_4096 = pa >> 12;
+  return kmem.is_cow[div_4096];
 }

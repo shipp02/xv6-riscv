@@ -259,7 +259,8 @@ dns()
 int
 main(int argc, char *argv[])
 {
-  int i, ret;
+  int ret;
+  int i;
   uint16 dport = NET_TESTS_PORT;
 
   printf("nettests running on port %d\n", dport);

@@ -103,6 +103,7 @@ struct tx_desc
   uint16 length;
   uint8 cso;
   uint8 cmd;
+  // Status covers of the reserved bits as well
   uint8 status;
   uint8 css;
   uint16 special;

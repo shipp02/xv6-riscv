@@ -115,9 +115,10 @@ e1000_transmit(struct mbuf *m)
     // I think the status field will indicate if we're done transmitting.
     uint64 base_h = 0;
     acquire(&e1000_lock);
+
     struct tx_desc* base = (struct tx_desc*)((base_h << 32) | regs[E1000_TDBAL]);
-    uint64 offset = regs[E1000_TDT];
-    struct tx_desc* desc_address = (struct tx_desc*) base + (offset); 
+    const uint64 offset = regs[E1000_TDT];
+    struct tx_desc* desc_address = (struct tx_desc*) base + offset; 
     if(desc_address->status & E1000_TXD_STAT_DD ) {
       if(tx_mbufs[offset]) {
         mbuffree(tx_mbufs[offset]);
@@ -125,13 +126,14 @@ e1000_transmit(struct mbuf *m)
       }
     } else {
       if(tx_mbufs[offset]) {
-        return -1;
         release(&e1000_lock);
+        return -1;
       } 
     }
     *desc_address = desc;
     tx_mbufs[offset] = m;
     regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
+
     release(&e1000_lock);
     curr = curr->next;
   }
@@ -147,18 +149,20 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
-  uint64 base_h = 0;
+  const uint64 base_h = 0;
   struct rx_desc* base = (struct rx_desc*)((base_h << 32) | regs[E1000_RDBAL]);
   acquire(&e1000_lock);
-  uint64 rcv_offset = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-  struct rx_desc* desc_address =  base + rcv_offset; 
+  
+  const uint64 offset = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  struct rx_desc* desc_address =  base + offset; 
   if(desc_address->status & E1000_RXD_STAT_DD) {
-    rx_mbufs[rcv_offset]->len = desc_address->length;
-    struct mbuf* msg = rx_mbufs[rcv_offset];
-    rx_mbufs[rcv_offset] = mbufalloc(0);
-    desc_address->addr = (uint64) rx_mbufs[rcv_offset]->head;
+    rx_mbufs[offset]->len = desc_address->length;
+    struct mbuf* msg = rx_mbufs[offset];
+    rx_mbufs[offset] = mbufalloc(0);
+    desc_address->addr = (uint64) rx_mbufs[offset]->head;
     desc_address->status = 0;
-    regs[E1000_RDT] = rcv_offset;
+    regs[E1000_RDT] = offset;
+
     release(&e1000_lock);
     net_rx(msg);
   } else {

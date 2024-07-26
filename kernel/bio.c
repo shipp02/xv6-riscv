@@ -357,15 +357,19 @@ bget(uint dev, uint blockno)
     for(struct link_s* l = list_head(&bcache.lru); l != list_tail(&bcache.lru); l = list_next(l)){
       b = list_ref(l, struct buf_hash_lru, link);
       if(b->b.refcnt == 0) {
+        list_remove(&bcache.lru, &b->link);
+        release(&bcache.lock);
+
         struct buf* buf = &b->b;
+        acquire(&buf->data_lk);
         buf->dev = dev;
         buf->blockno = blockno;
         buf->valid = 0;
         buf->refcnt = 1;
         uint64 key = ((((uint64) dev) << 32) | blockno);
-        list_remove(&bcache.lru, &b->link);
+        release(&buf->data_lk);
+
         hashtable_insert(&bcache.buf_table, &b->hash_node, &key, 8);
-        release(&bcache.lock);
         acquiresleep(&buf->lock);
         return buf;
       }
@@ -423,6 +427,9 @@ brelse(struct buf *b)
     acquire(&b->data_lk);
 
     list_push_back(&bcache.lru, &b_ds->link);
+    release(&b->data_lk);
+    release(&bcache.lock);
+
     hashtable_remove(&bcache.buf_table, &b_ds->hash_node.key, 8);
     // b->next->prev = b->prev;
     // b->prev->next = b->next;
@@ -431,8 +438,6 @@ brelse(struct buf *b)
     // bcache.head.next->prev = b;
     // bcache.head.next = b;
 
-    release(&b->data_lk);
-    release(&bcache.lock);
   } else {
     release(&b->data_lk);
   }

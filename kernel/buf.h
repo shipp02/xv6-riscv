@@ -6,8 +6,6 @@ struct buf {
   struct sleeplock lock;
   struct spinlock data_lk;
   uint refcnt;
-  // struct buf *prev; // LRU cache list
-  // struct buf *next;
   uchar data[BSIZE];
 };
 

@@ -23,13 +23,15 @@
 #include "fs.h"
 #include "buf.h"
 #include <stddef.h>
-
+#include <stdbool.h>
 // Highly inspired by libintrusive 
 
 #define assert(exp) if(!exp) {printf("%s:%d, %s\n", __FILE__, __LINE__, #exp );}
 
 struct link_s {
   struct link_s *next;
+  // Acts like a tombstone
+  uint8 rm;
 };
 
 struct list_s {
@@ -92,19 +94,9 @@ struct link_s *list_pop_front(struct list_s *list) {
     //?? if (link->next) link->next->prev = link->prev;
     if (list->head == link) list->head = link->next;
     if (list->tail == link) list->tail = 0;
+    link->next = 0;
     return link;
 }
-
-// Cannot be implemented in constant time unless doubly linked list
-// struct link_s *list_pop_back(struct list_s *list) {
-//     struct link_s *link = list->tail;
-//     if (!link) return 0;
-//     //?? Tail pointer should not have a next if (link->next) link->next->prev = link->prev;
-//     //?? Don't have a prev if (link->prev) link->prev->next = link->next;
-//     if (list->head == link) list->head = link->next;
-//     if (list->tail == link) list->tail = link->prev;
-//     return link;
-// }
 
 void list_remove(struct list_s *list, struct link_s *link) {
   if (!link) return;
@@ -112,13 +104,16 @@ void list_remove(struct list_s *list, struct link_s *link) {
   while(prev != 0 && prev->next != link && prev != list_tail(list)) {
     prev = list_next(prev);
   }
-  // if(prev == list_tail(list)) {
-  //   panic("list: Could not find list prev.");
-  // }
-  // if (link->next) link->next->prev = link->prev;
-  if (prev) prev->next = link->next;
-  if (list->head == link) list->head = link->next;
-  if (list->tail == link) list->tail = prev;
+  if (prev) {
+    prev->next = link->next;
+  }
+  if (list->head == link) {
+    list->head = link->next;
+  }
+  if (list->tail == link) {
+    list->tail = prev;
+  }
+  link->next = 0;
 }
 
 struct link_s *list_head(const struct list_s *list) {
@@ -145,10 +140,6 @@ int list_len(const struct list_s* list) {
   return n;
 }
 
-// struct link_s *list_prev(const struct link_s *link) {
-//   return link->prev;
-// }
-
 
 struct hashnode_s {
   struct hashnode_s *next;
@@ -172,7 +163,7 @@ struct hashtable {
 };
 int hashtable_init(struct hashtable *table, uint64 pow2size, hash_function* hash_func);
 void hashtable_destroy(struct hashtable *table);
-void hashtable_insert(struct hashtable *table, struct hashnode_s *node, void *key, uint64 keylen);
+bool hashtable_insert(struct hashtable *table, struct hashnode_s *node, void *key, uint64 keylen);
 struct hashnode_s *hashtable_search(struct hashtable *table, const void *key, uint64 keylen);
 void hashtable_remove(struct hashtable *table, const void *key, uint64 keylen);
 
@@ -184,7 +175,7 @@ static void hash_node_init(struct hashnode_s *node, void *key, uint64 keylen) {
 
 static inline uint64 hash_node_bin(uint64 bins, uint64 keyhash) {
   // Fast module for bins that are powers of 2.
-  return keyhash & (bins - 1);
+  return keyhash % bins ;
 }
 
 static struct hashnode_s *hash_node_find(struct hashnode_s *node, const void *key, uint64 keylen) {
@@ -220,7 +211,7 @@ void hashtable_destroy(struct hashtable *table) {
   // free(table->hashnodes);
 }
 
-void hashtable_insert(struct hashtable *table, struct hashnode_s *node, void *key, uint64 keylen) {
+bool hashtable_insert(struct hashtable *table, struct hashnode_s *node, void *key, uint64 keylen) {
   hash_node_init(node, key, keylen);
   uint64 hash = table->hash_func(&node->key, node->keylen);
   uint64 bin = hash_node_bin(table->size, hash);
@@ -229,15 +220,19 @@ void hashtable_insert(struct hashtable *table, struct hashnode_s *node, void *ke
   if (!head) {
     table->hashnodes[bin] = node;
     release(&table->bucket_lock[bin]);
-    return;
+    return true;
   }
-  if (hash_node_find(head, &node->key, node->keylen)) {
+  struct hashnode_s *find = hash_node_find(head, &node->key, node->keylen);
+  if (find) {
+    // printf("Found existing node with key: %p\n", *(uint64*)key);
+    // panic("Found exisiting node");
     release(&table->bucket_lock[bin]);
-    return;
+    return false;
   }
   table->hashnodes[bin] = node;
   node->next = head;
   release(&table->bucket_lock[bin]);
+  return true;
 }
 
 struct hashnode_s *hashtable_search(struct hashtable *table, const void *key, uint64 keylen) {
@@ -311,14 +306,9 @@ binit(void)
   // bcache.head.prev = &bcache.head;
   // bcache.head.next = &bcache.head;
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    // hash_node_init(&b->hash_node);
     list_push_front(&bcache.lru, &b->link);
-    // b->next = bcache.head.next;
-    // b->prev = &bcache.head;
     initsleeplock(&b->b.lock, "buffer");
     initlock(&b->b.data_lk, "bcache.data");
-    // bcache.head.next->prev = b;
-    // bcache.head.next = b;
   }
   assert((list_len(&bcache.lru) == NBUF));
 }
@@ -330,10 +320,12 @@ static struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf_hash_lru *b;
+  uint64 try_count = 0;
 
 
   uint64 key = ((((uint64) dev) << 32) | blockno);
   // Is the block already cached?
+retry:
   struct hashnode_s* n = hashtable_search(&bcache.buf_table, &key, 8);
   if(n) {
     b = hashtable_ref(n, struct buf_hash_lru, hash_node);
@@ -360,18 +352,22 @@ bget(uint dev, uint blockno)
         list_remove(&bcache.lru, &b->link);
         release(&bcache.lock);
 
-        struct buf* buf = &b->b;
-        acquire(&buf->data_lk);
-        buf->dev = dev;
-        buf->blockno = blockno;
-        buf->valid = 0;
-        buf->refcnt = 1;
         uint64 key = ((((uint64) dev) << 32) | blockno);
-        release(&buf->data_lk);
 
-        hashtable_insert(&bcache.buf_table, &b->hash_node, &key, 8);
-        acquiresleep(&buf->lock);
-        return buf;
+        if(hashtable_insert(&bcache.buf_table, &b->hash_node, &key, 8)) {
+          struct buf* buf = &b->b;
+          acquire(&buf->data_lk);
+          buf->dev = dev;
+          buf->blockno = blockno;
+          buf->valid = 0;
+          buf->refcnt = 1;
+          release(&buf->data_lk);
+          acquiresleep(&buf->lock);
+          return buf;
+        } else {
+          try_count++;
+          goto retry;
+        }
       }
     }
     release(&bcache.lock);
@@ -423,20 +419,10 @@ brelse(struct buf *b)
     // Probably need to do something for the LRU.
     release(&b->data_lk);
 
-    acquire(&bcache.lock);
-    acquire(&b->data_lk);
-
-    list_push_back(&bcache.lru, &b_ds->link);
-    release(&b->data_lk);
-    release(&bcache.lock);
-
     hashtable_remove(&bcache.buf_table, &b_ds->hash_node.key, 8);
-    // b->next->prev = b->prev;
-    // b->prev->next = b->next;
-    // b->next = bcache.head.next;
-    // b->prev = &bcache.head;
-    // bcache.head.next->prev = b;
-    // bcache.head.next = b;
+    acquire(&bcache.lock);
+    list_push_back(&bcache.lru, &b_ds->link);
+    release(&bcache.lock);
 
   } else {
     release(&b->data_lk);

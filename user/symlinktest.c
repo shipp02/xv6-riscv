@@ -15,6 +15,7 @@ static int failed = 0;
 static void testsymlink(void);
 static void concur(void);
 static void cleanup(void);
+#define T_SYMLINK 4
 
 int
 main(int argc, char *argv[])

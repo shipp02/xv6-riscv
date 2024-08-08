@@ -349,6 +349,16 @@ sys_open(void)
     return -1;
   }
 
+  if(ip->type == T_SYMLINK) {
+    ilock(f->ip);
+    char target_path[MAXPATH];
+    uint64 addr = (uint64) target_path;
+    int r = 0;
+    r = readi(f->ip, 0, addr, f->off, n);
+    iunlock(f->ip);
+    printf("Symlink read: %d to %s\n", r, (char*)target_path);
+  }
+
   if(ip->type == T_DEVICE){
     f->type = FD_DEVICE;
     f->major = ip->major;
@@ -501,5 +511,35 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 sys_symlink(void) {
+  char path[MAXPATH];
+  uint64 target;
+  struct file *f;
+  struct inode *ip;
+  int n;
+
+  // argint(1, &omode);
+  if((n = argstr(1, path, MAXPATH)) < 0)
+    return -1;
+  argaddr(0, &target);
+
+  begin_op();
+
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  if((f = filealloc()) == 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  filewrite(f, target, MAXPATH);
+  fileclose(f);
+  printf("Created symlink");
   return 0;
 }

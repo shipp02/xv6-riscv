@@ -65,6 +65,8 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 13 || r_scause() == 15) {
+    map_mmap_addr(p->pagetable, r_stval());
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

@@ -609,7 +609,7 @@ sys_munmap(void)
   // acquire(&p->mmap_lk);
   for(int i = 0;i<NUM_MMAP_VMA; i++) {
     if(p->mmap_vmas[i].in_use) {
-      if(p->mmap_vmas[i].addr <= addr && addr < p->mmap_vmas[i].addr + p->mmap_vmas[i].len) {
+      if(p->mmap_vmas[i].addr <= addr && addr < p->mmap_vmas[i].addr + p->mmap_vmas[i].len && p->mmap_vmas[i].f->writable) {
         if(len<p->mmap_vmas[i].len) {
         } else {
           len = p->mmap_vmas[i].len;
@@ -648,6 +648,7 @@ void map_mmap_addr(pagetable_t pagetable, uint64 addr) {
         *pte |= PTE_V;
         memset(pa, 0, PGSIZE);
         readi(p->mmap_vmas[i].f->ip, 0, (uint64) pa, PGROUNDDOWN(addr) - p->mmap_vmas[i].addr, PGSIZE);
+        return;
       }
     }
   }

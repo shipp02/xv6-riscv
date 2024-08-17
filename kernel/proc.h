@@ -1,3 +1,4 @@
+#include<stdbool.h>
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -81,9 +82,23 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+struct mmap_vma {
+  uint64 addr;
+  uint64 len;
+  uint64 offset;
+  int prot;
+  int flags;
+  int fd;
+  struct file* f;
+  bool in_use;
+};
+#define NUM_MMAP_VMA 16
+
 // Per-process state
 struct proc {
   struct spinlock lock;
+  // struct spinlock mmap_lk;
+  struct mmap_vma mmap_vmas[NUM_MMAP_VMA];
 
   // p->lock must be held when using these:
   enum procstate state;        // Process state

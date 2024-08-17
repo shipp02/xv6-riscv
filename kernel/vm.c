@@ -171,6 +171,25 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+void
+uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("uvm_virt_unmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvm_virt_unmap: walk");
+    if(PTE_FLAGS(*pte) & PTE_V) {
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    *pte = 0;
+  }
+}
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -227,6 +246,67 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
   memmove(mem, src, sz);
 }
 
+// Allocates PTR's but does not allocate physical memory, the PTE_R and
+// PTR_W will not be set so that we get a fault when this memory is used 
+// Only PTE_V is set
+
+int
+virt_mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("mappages: va not aligned");
+
+  if((size % PGSIZE) != 0)
+    panic("mappages: size not aligned");
+
+  if(size == 0)
+    panic("mappages: size");
+  
+  a = va;
+  last = va + size - PGSIZE;
+  for(;;){
+    if((pte = walk(pagetable, a, 1)) == 0)
+      return -1;
+    if(*pte & PTE_V)
+      panic("mappages: remap");
+    *pte = PA2PTE(pa) | perm;
+    if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
+  }
+  return 0;
+}
+uint64
+uvm_virt_alloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
+{
+  char *mem = 0;
+  uint64 a;
+
+  if(newsz < oldsz)
+    return oldsz;
+
+  oldsz = PGROUNDUP(oldsz);
+  for(a = oldsz; a < newsz; a += PGSIZE){
+    // mem = kalloc();
+    // if(mem == 0){
+    //   uvmdealloc(pagetable, a, oldsz);
+    //   return 0;
+    // }
+    // memset(mem, 0, PGSIZE);
+    // Set PTE_W to mark for future use.
+    if(virt_mappages(pagetable, a, PGSIZE, (uint64)mem, xperm | PTE_U) != 0){
+      uvmdealloc(pagetable, a, oldsz); 
+      //? Remove PTE"s that have not been used yet?
+      // Might need handle this in existing uvmdealloc function since differentiating will be hard.
+      return 0;
+    }
+  }
+  return newsz;
+}
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
 uint64

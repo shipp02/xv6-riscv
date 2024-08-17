@@ -72,6 +72,11 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+
+// vm.c
+uint64 uvm_virt_alloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm);
+void uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
@@ -198,6 +203,9 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+
+void map_mmap_addr(pagetable_t, uint64);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

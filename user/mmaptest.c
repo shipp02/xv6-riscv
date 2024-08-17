@@ -9,7 +9,7 @@
 void mmap_test();
 void fork_test();
 char buf[BSIZE];
-
+#define TEST_CHAR 'B'
 #define MAP_FAILED ((char *) -1)
 
 int
@@ -39,7 +39,7 @@ _v1(char *p)
   int i;
   for (i = 0; i < PGSIZE*2; i++) {
     if (i < PGSIZE + (PGSIZE/2)) {
-      if (p[i] != 'A') {
+      if (p[i] != TEST_CHAR) {
         printf("mismatch at %d, wanted 'A', got 0x%x\n", i, p[i]);
         err("v1 mismatch (1)");
       }
@@ -66,7 +66,7 @@ makefile(const char *f)
   int fd = open(f, O_WRONLY | O_CREATE);
   if (fd == -1)
     err("open");
-  memset(buf, 'A', BSIZE);
+  memset(buf, TEST_CHAR, BSIZE);
   // write 1.5 page
   for (i = 0; i < n + n/2; i++) {
     if (write(fd, buf, BSIZE) != BSIZE)
@@ -276,7 +276,7 @@ fork_test(void)
     err("mmap (8)");
 
   // read just 2nd page.
-  if(*(p1+PGSIZE) != 'A')
+  if(*(p1+PGSIZE) != TEST_CHAR)
     err("fork mismatch (1)");
 
   if((pid = fork()) < 0)

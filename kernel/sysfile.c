@@ -10,11 +10,12 @@
 #include "param.h"
 #include "stat.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "fs.h"
-#include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include <stdbool.h>
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -502,4 +503,153 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  uint64 len;
+  int prot;
+  int flags;
+  int fd;
+  struct file* f;
+  uint64 offset;
+  struct proc* p = myproc();
+
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argfd(4, &fd, &f);
+  if(prot & PROT_WRITE && !f->writable) {
+    if(flags & MAP_PRIVATE) {
+
+    } else {
+      return -1;
+    }
+  }
+  argaddr(5, &offset);
+  if(addr != 0) {
+    panic("addr is not zero.");
+  }
+  int perm = 0;
+  if(prot & PROT_READ) {
+    perm |= PTE_R;
+  }
+  if(prot & PROT_WRITE) {
+    perm |= PTE_R;
+    perm |= PTE_W;
+  }
+  if(prot & PROT_EXEC) {
+    perm |= PTE_X;
+  }
+  // acquire(&p->mmap_lk);
+  for(int i = 0;i<NUM_MMAP_VMA; i++) {
+    if(!p->mmap_vmas[i].in_use) {
+      addr = p->sz;
+      p->sz = uvm_virt_alloc(p->pagetable, p->sz, p->sz + len, perm);
+      p->mmap_vmas[i].in_use = true;
+      p->mmap_vmas[i].addr = addr;
+      p->mmap_vmas[i].len = len;
+      p->mmap_vmas[i].prot = prot;
+      p->mmap_vmas[i].flags = prot;
+      p->mmap_vmas[i].offset = offset;
+      p->mmap_vmas[i].f = f;
+      f->ref++;
+      break;
+    }
+  }
+  // release(&p->mmap_lk);
+
+  return addr;
+}
+
+uint64
+write_data(struct file *f, uint64 addr, int n) {
+  // write a few blocks at a time to avoid exceeding
+  // the maximum log transaction size, including
+  // i-node, indirect block, allocation blocks,
+  // and 2 blocks of slop for non-aligned writes.
+  // this really belongs lower down, since writei()
+  // might be writing a device like the console.
+  int r = 0, ret = 0;
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  int i = 0;
+  while(i < n){
+    int n1 = n - i;
+    if(n1 > max)
+      n1 = max;
+
+    begin_op();
+    ilock(f->ip);
+    if ((r = writei(f->ip, 1, addr + i, f->off, n1)) > 0)
+      f->off += r;
+    iunlock(f->ip);
+    end_op();
+
+    if(r != n1){
+      // error from writei
+      break;
+    }
+    i += r;
+  }
+  ret = (i == n ? n : -1);
+  return ret;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  uint64 len;
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  struct proc* p = myproc();
+  // acquire(&p->mmap_lk);
+  for(int i = 0;i<NUM_MMAP_VMA; i++) {
+    if(p->mmap_vmas[i].in_use) {
+      if(p->mmap_vmas[i].addr <= addr && addr < p->mmap_vmas[i].addr + p->mmap_vmas[i].len) {
+        if(len<p->mmap_vmas[i].len) {
+        } else {
+          len = p->mmap_vmas[i].len;
+        }
+        p->mmap_vmas[i].f->off = addr - p->mmap_vmas[i].addr;
+        write_data(p->mmap_vmas[i].f, addr, len);
+        uvm_virt_unmap(myproc()->pagetable, addr, len/PGSIZE);
+        if(p->mmap_vmas[i].addr == addr && len == p->mmap_vmas[i].len) {
+          p->mmap_vmas[i].f->ref--;
+        }
+        memset(&p->mmap_vmas[i], 0, sizeof(struct mmap_vma));
+      }
+    }
+  }
+  // release(&p->mmap_lk);
+  return 0;
+}
+
+void map_mmap_addr(pagetable_t pagetable, uint64 addr) {
+  struct proc* p = myproc();
+  // acquire(&p->mmap_lk);
+  // printf("mmap: Reading addr %p\n", addr);
+  for(int i = 0;i<NUM_MMAP_VMA; i++) {
+    if(p->mmap_vmas[i].in_use) {
+      if(p->mmap_vmas[i].addr <= addr && addr < p->mmap_vmas[i].addr + p->mmap_vmas[i].len) {
+        // printf("mmap: Found addr %p\n", addr);
+        pte_t *pte;
+        if((pte = walk(pagetable, addr, 1)) == 0) {
+          panic("mmap: Could not find addr");
+        }
+        if(*pte & PTE_V) {
+          panic("mmap: remap");
+        }
+        void* pa = kalloc();
+        *pte |= PA2PTE(pa);
+        *pte |= PTE_V;
+        memset(pa, 0, PGSIZE);
+        readi(p->mmap_vmas[i].f->ip, 0, (uint64) pa, PGROUNDDOWN(addr) - p->mmap_vmas[i].addr, PGSIZE);
+      }
+    }
+  }
+  // release(&p->mmap_lk);
 }

@@ -607,6 +607,10 @@ sys_munmap(void)
   argaddr(1, &len);
   struct proc* p = myproc();
   // acquire(&p->mmap_lk);
+  if (len % PGSIZE != 0) {
+    printf("length is not multiple of PGSIZE");
+    return -1;
+  }
   for(int i = 0;i<NUM_MMAP_VMA; i++) {
     if(p->mmap_vmas[i].in_use) {
       if(p->mmap_vmas[i].addr <= addr && addr < p->mmap_vmas[i].addr + p->mmap_vmas[i].len && p->mmap_vmas[i].f->writable) {
@@ -616,11 +620,15 @@ sys_munmap(void)
         }
         p->mmap_vmas[i].f->off = addr - p->mmap_vmas[i].addr;
         write_data(p->mmap_vmas[i].f, addr, len);
-        uvm_virt_unmap(myproc()->pagetable, addr, len/PGSIZE);
+        uvmunmap(myproc()->pagetable, addr, len/PGSIZE, 1);
         if(p->mmap_vmas[i].addr == addr && len == p->mmap_vmas[i].len) {
           p->mmap_vmas[i].f->ref--;
+          memset(&p->mmap_vmas[i], 0, sizeof(struct mmap_vma));
+        } else if (p->mmap_vmas[i].addr == addr && len < p->mmap_vmas[i].len){
+          p->mmap_vmas[i].addr = p->mmap_vmas[i].addr + len;
+          p->mmap_vmas[i].len -= len;
         }
-        memset(&p->mmap_vmas[i], 0, sizeof(struct mmap_vma));
+        break;
       }
     }
   }

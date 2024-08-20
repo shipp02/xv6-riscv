@@ -75,7 +75,7 @@ void            kinit(void);
 
 // vm.c
 uint64 uvm_virt_alloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm);
-void uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages);
+// void uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages);
 
 // log.c
 void            initlog(int, struct superblock*);

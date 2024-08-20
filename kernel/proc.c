@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -289,11 +292,41 @@ fork(void)
     return -1;
   }
 
+  for(int i = 0;i<NUM_MMAP_VMA; i++) {
+    np->mmap_vmas[i] = p->mmap_vmas[i];
+    if(np->mmap_vmas[i].in_use) {
+      np->mmap_vmas[i].f->ref++;
+    }
+  }
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
+  }
+  for(int i = 0;i<p->sz;i+= PGSIZE) {
+    pte_t* pte;
+    if((pte = walk(p->pagetable, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0) {
+      bool valid_as_mmap = false;
+      if(*pte == 0) {
+        continue;
+      }
+
+      for(int j = 0;j<NUM_MMAP_VMA; j++) {
+        if(np->mmap_vmas[j].in_use) {
+          if(np->mmap_vmas[j].addr <= i && i < np->mmap_vmas[j].addr + np->mmap_vmas[j].len) {
+            valid_as_mmap = true;
+            break;
+          }
+        }
+      }
+      if(!valid_as_mmap) {
+        panic("fork: page not present");
+      }
+    }
   }
   np->sz = p->sz;
 

@@ -4,7 +4,10 @@
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
 #include "fs.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -172,7 +175,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 }
 
 void
-uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages)
+uvm_virt_unmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
   uint64 a;
   pte_t *pte;
@@ -205,8 +208,10 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((*pte & PTE_V) == 0) {
+      uvm_virt_unmap(pagetable, a, 1, do_free);
+      continue;
+    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -249,7 +254,6 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
 // Allocates PTR's but does not allocate physical memory, the PTE_R and
 // PTR_W will not be set so that we get a fault when this memory is used 
 // Only PTE_V is set
-
 int
 virt_mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -396,20 +400,31 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
+  // const int NUM_MMAP_VMA = 16;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    if((*pte & PTE_V) == 0) {
+      // panic("uvmcopy: page not present");
+      // if (p->mmap_vmas[i].addr <= pte && pte < p->mmap_vmas[i].addr + p->mmap_vmas[i].len) {
+      // }
+      pa = 0;
+      flags = PTE_FLAGS(*pte);
+      if(virt_mappages(new, i, PGSIZE, (uint64)0, flags) != 0){
+        goto err;
+      }
+      continue;
+    } else {
+      pa = PTE2PA(*pte);
+      flags = PTE_FLAGS(*pte);
+      if((mem = kalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, PGSIZE);
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        goto err;
+      }
     }
   }
   return 0;
